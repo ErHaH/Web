@@ -1,0 +1,99 @@
+web项目使用同步IO模拟Proactor事件处理模式
+    Reactor模式：主线程监听、注册，子线程读写
+    Proactor模式：主线程监听、读写，子线程注册
+
+思路：
+    1、多线程项目首先考虑线程同步问题，故封装线程同步机制类，
+       互斥锁需要创建条件变量类、信号量类配合使用
+    2、目的是实现高并发，在连接量大的时候需要创建很多线程，对CPU资源消耗大，
+       所以可以封装线程池提前创建好线程，需要的时候唤醒使用。另外需要创建模板
+       类型的线程池为的是方便复用，模板参数是任务类
+    
+收获：
+    1、增加对面向对象编程的理解
+    2、
+
+模块详情：
+线程同步类：
+    1、首先写宏对分文件进行预处理#ifndef
+    2、创建互斥锁类并初始化，用抛出异常来判断是否初始化成功
+    3、创建条件变量类配合互斥锁使用
+    4、创建信号量类（应该是用来取代信号量）
+
+    class locker {
+    public:
+        locker();
+        ~locker();
+        bool lock();
+        bool unlock();
+        pthread_mutex_t *get();       
+    private:
+        pthread_mutex_t m_mutex;
+    }; 
+
+    class cond {
+    public:
+        cond();
+        ~cond();
+        bool wait(pthread_mutex_t *m_mutex);
+        bool timewait(pthread_mutex_t *m_mutex, struct timespec t);
+        bool signal();
+        bool broadcast();
+    private:
+        pthread_cond_t m_cond;
+    };
+    
+    class sem {
+    public:
+        sem();
+        sem(int num); 
+        ~sem();
+        bool wait();
+        bool post();
+    private:
+        sem_t m_sem;
+    };
+
+线程池模块
+    1、首先写宏对分文件进行预处理#ifndef
+    2、创建线程池模板类
+    3、
+
+    template<class T>
+    class threadpool {
+    public:
+        threadpool(int thread_num, int max_requests);
+        ~threadpool();
+        bool append(T* request);
+
+    private:
+        static void *worker(void *arg);
+        void run();
+
+    private:
+        pthread_t *m_threads;
+        int m_thread_number;
+        int m_max_requests;
+        std::list<T *> m_workqueue;
+        locker m_queuelock;
+        sem m_queuesem;
+        bool m_stop;
+    };
+
+
+
+主程序模块
+    1、创建main函数为主线程
+    2、main函数会带有传入参数，通过传入参数控制指定哪个端口进行通信
+    3、使用atoi函数将字符串格式的端口参数改变为int型
+    4、考虑客户端关闭连接还继续传数据会发出SIGPIPE信号，创建对应的捕捉函数和回调
+    5、创建线程池实例，任务参数定为http_conn，另外定义http_conn头文件并定义process方法
+    6、new操作符的使用会抛出异常故使用try catch进行异常处理
+    7、创建http_conn数组保存用户信息，故需要定义最大文件描述符宏
+    8、进入网络编程阶段
+    9、由于项目使用proaction模式，主线程负责监听、读写，故需要进行设置端口复用
+    10、使用epoll实现IO复用，由于需要多次将监听文件描述符赋值到结构体故封装一个函数进行
+        调用实现，设置检测EPOLLRDHUP，这是新内核特性，可以不通过recv进行系统调用就可以得
+        知客户端的sockfd是否断开,选择将函数放在http_connt中，使用extern进行拓展
+    11、考虑到epoll处在多个线程操作同一个socket情况，需要对socketfd注册EPOLLONESHOT，
+        确保只有一个线程进行操作，操作完要将SHOT重置（通过定义modfd方法实现）
